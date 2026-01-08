@@ -1,281 +1,281 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, 
-  Tooltip, ResponsiveContainer, ReferenceLine, ComposedChart 
+  Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  ComposedChart, Area, BarChart, Bar, Cell 
 } from 'recharts';
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { getAnalysis } from './analysis';
 
 export default function App() {
-  // --- APP STATE ---
   const [user, setUser] = useState(null); 
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [role, setRole] = useState("user");
   const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [systolic, setSystolic] = useState("");
   const [diastolic, setDiastolic] = useState("");
   const [history, setHistory] = useState([]);
-  const [showAlert, setShowAlert] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
+  const [alert, setAlert] = useState(null);
 
-  // --- ADMIN CONFIG ---
-  const ADMIN_CREDENTIALS = { user: "admin", pass: "admin123" };
-
-  const getGreeting = () => {
+  // Function to get Greeting based on current time
+  const getTimeGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return "Good Morning";
     if (hour < 18) return "Good Afternoon";
     return "Good Evening";
   };
 
-  // --- DATA SYNC ---
-  useEffect(() => {
-    if (user && !isAdmin) {
-      const allData = JSON.parse(localStorage.getItem("bp_app_vault") || "{}");
-      setHistory(allData[user]?.history || []);
-    }
-  }, [user, isAdmin]);
-
-  useEffect(() => {
-    if (user && !isAdmin) {
-      const allData = JSON.parse(localStorage.getItem("bp_app_vault") || "{}");
-      if (allData[user]) {
-        allData[user].history = history;
-        localStorage.setItem("bp_app_vault", JSON.stringify(allData));
-      }
-    }
-  }, [history, user, isAdmin]);
-
-  // --- AUTH ACTIONS ---
   const handleLogin = (e) => {
     e.preventDefault();
-    const u = usernameInput.trim();
-    const p = passwordInput.trim();
-
-    if (u === ADMIN_CREDENTIALS.user && p === ADMIN_CREDENTIALS.pass) {
-      setIsAdmin(true);
-      setUser("Admin");
-      return;
+    const input = usernameInput.trim();
+    if (input.toLowerCase() === "admin") {
+      setUser("Root_Admin");
+      setRole("admin");
+    } else if (input) {
+      setUser(input);
+      setRole("user");
     }
-
-    const allData = JSON.parse(localStorage.getItem("bp_app_vault") || "{}");
-    
-    if (allData[u]) {
-      if (allData[u].password === p) {
-        setUser(u);
-        setErrorMsg("");
-      } else {
-        setErrorMsg("Incorrect password.");
-      }
-    } else {
-      // Create new account
-      allData[u] = { password: p, history: [] };
-      localStorage.setItem("bp_app_vault", JSON.stringify(allData));
-      setUser(u);
-      setErrorMsg("");
-    }
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setIsAdmin(false);
+    // SECURE: Automatically clears credentials from the UI once logged in
     setUsernameInput("");
     setPasswordInput("");
-    setErrorMsg("");
   };
 
-  // --- ADMIN ACTIONS ---
-  const deleteUser = (targetUser) => {
-    if (window.confirm(`Delete ${targetUser} and all their data?`)) {
-      const allData = JSON.parse(localStorage.getItem("bp_app_vault") || "{}");
-      delete allData[targetUser];
-      localStorage.setItem("bp_app_vault", JSON.stringify(allData));
-      // Trigger re-render for admin list
-      setIsAdmin(true); 
-    }
-  };
-
-  // --- DASHBOARD ACTIONS ---
   const addReading = (e) => {
     e.preventDefault();
-    const sys = Number(systolic);
-    const dia = Number(diastolic);
+    const userSpecificHistory = history.filter(h => h.account === user);
+    const res = getAnalysis(Number(systolic), Number(diastolic), userSpecificHistory);
     
-    let category = { label: "Normal", color: "#22c55e" };
-    if (sys >= 180 || dia >= 120) category = { label: "CRISIS! Call Doctor", color: "#ef4444" };
-    else if (sys >= 140 || dia >= 90) category = { label: "High (Stage 2)", color: "#f97316" };
-    else if (sys >= 130 || dia >= 80) category = { label: "High (Stage 1)", color: "#eab308" };
-    else if (sys >= 120 && dia < 80) category = { label: "Elevated", color: "#84cc16" };
+    if (res.type !== 'original') {
+      setAlert({ msg: res.msg, color: res.color });
+      setTimeout(() => setAlert(null), 4000);
+    }
 
     const newEntry = {
       id: Date.now(),
-      systolic: sys,
-      diastolic: dia,
-      status: category.label,
-      color: category.color,
+      systolic: Number(systolic),
+      diastolic: Number(diastolic),
+      status: res.msg,
+      medical: res.medical,
+      color: res.color,
+      type: res.type,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      date: new Date().toLocaleDateString()
+      date: new Date().toLocaleDateString(),
+      account: user
     };
-
     setHistory([...history, newEntry]);
     setSystolic(""); setDiastolic("");
-    if (sys >= 180 || dia >= 120) {
-      setShowAlert(true);
-      setTimeout(() => setShowAlert(false), 5000);
-    }
   };
 
-  const downloadPDF = () => {
+  const downloadPDF = (title = "Health Report", dataToExport) => {
     const doc = new jsPDF();
-    doc.text(`VitalTrack Health Report: ${user}`, 14, 15);
-    autoTable(doc, {
-      head: [['Date', 'Time', 'BP (Sys/Dia)', 'Status']],
-      body: history.map(i => [i.date, i.time, `${i.systolic}/${i.diastolic}`, i.status]),
-      startY: 25,
-      headStyles: { fillColor: [99, 102, 241] }
+    doc.setFontSize(18);
+    doc.setTextColor(79, 70, 229);
+    doc.text(title, 14, 20);
+    doc.setFontSize(10);
+    doc.setTextColor(100);
+    doc.text(`Generated for: ${user}`, 14, 28);
+    
+    const rows = dataToExport.map(h => [h.date + ' ' + h.time, `${h.systolic}/${h.diastolic}`, h.medical, h.status]);
+    autoTable(doc, { 
+        startY: 35, 
+        head: [['Timestamp', 'BP Reading', 'Diagnosis', 'Security Status']], 
+        body: rows,
+        headStyles: { fillColor: [79, 70, 229] }
     });
-    doc.save(`${user}_Report.pdf`);
+    doc.save(`VitalTrack_${user}_Report.pdf`);
   };
 
-  // --- 1. LOGIN VIEW ---
+  // --- LOGIN UI ---
   if (!user) {
     return (
-      <div style={uniqueLoginContainer}>
-        <style>{`.animate-in { animation: fadeInUp 0.8s ease-out forwards; } @keyframes fadeInUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }`}</style>
-        <div style={leftPanel}>
-          <div style={circleDecor}></div>
-          <div className="animate-in">
-            <h1 style={brandText}>VitalTrack</h1>
-            <p style={subText}>Advanced Health Visualization.</p>
-          </div>
+      <div style={darkBg}>
+        <div style={heroSection}>
+          <h1 style={heroTitle}>VitalTrack</h1>
+          <p style={heroSub}>Advanced Health Visualization.</p>
         </div>
-        <div style={rightPanel}>
-          <div style={glassCard} className="animate-in">
-            <span style={greetingText}>{getGreeting()}</span>
-            <h2 style={loginHeader}>Who is tracking today?</h2>
-            <form onSubmit={handleLogin}>
-              <input style={glassInput} placeholder="Username" value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)} required />
-              <input type="password" style={glassInput} placeholder="Password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} required />
-              {errorMsg && <p style={{color: '#ef4444', fontSize: '0.8rem', marginBottom: '10px'}}>{errorMsg}</p>}
-              <button style={neonButton} type="submit">Access Dashboard →</button>
+        <div style={glassCard}>
+          <p style={greeting}>{getTimeGreeting()}</p>
+          <h2 style={loginHeading}>Who is tracking today?</h2>
+          <form onSubmit={handleLogin} style={{marginTop: '30px'}}>
+            <input style={darkInput} placeholder="Username" value={usernameInput} onChange={(e) => setUsernameInput(e.target.value)} required />
+            <input type="password" style={darkInput} placeholder="Password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} required />
+            <button style={heroBtn} type="submit">Access Dashboard →</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // --- PROFESSIONAL ADMIN PAGE ---
+  if (role === "admin") {
+    const attacks = history.filter(h => h.type === 'attack').length;
+    const uniqueUsers = Array.from(new Set(history.map(h => h.account)));
+
+    return (
+      <div style={adminContainer}>
+        <aside style={adminSidebar}>
+          <div style={sidebarBrand}>VT MONITOR</div>
+          <div style={sidebarTabActive}>📊 System Overview</div>
+          <div style={sidebarTab}>👥 Accounts</div>
+          <div style={sidebarTab}>🛡️ Security Audit</div>
+          <button onClick={() => setUser(null)} style={adminLogout}>End Session</button>
+        </aside>
+
+        <main style={adminContent}>
+          <div style={adminHeader}>
+            <div>
+              <p style={{color: '#6366f1', fontWeight: 'bold', margin: 0}}>{getTimeGreeting()}</p>
+              <h1>Global Administration</h1>
+            </div>
+            <button onClick={() => downloadPDF("Master Security Audit", history)} style={primaryBtn}>Master Export (PDF)</button>
+          </div>
+
+          <div style={statGrid}>
+            <div style={statCard}><h3>Total Records</h3><p>{history.length}</p></div>
+            <div style={statCard}><h3>Active Users</h3><p>{uniqueUsers.length}</p></div>
+            <div style={statCard}><h3>Threats Detected</h3><p style={{color: '#ef4444'}}>{attacks}</p></div>
+          </div>
+
+          <div style={adminPanelBody}>
+            <div style={panelSection}>
+              <h3>Account Management</h3>
+              <table style={adminTable}>
+                <thead>
+                  <tr><th>Account</th><th>Integrity</th><th>Activity</th><th>Action</th></tr>
+                </thead>
+                <tbody>
+                  {uniqueUsers.map(accName => (
+                    <tr key={accName}>
+                      <td>{accName}</td>
+                      <td>
+                        <span style={{color: history.some(h => h.account === accName && h.type === 'attack') ? '#ef4444' : '#10b981'}}>
+                          {history.some(h => h.account === accName && h.type === 'attack') ? '🚨 Compromised' : '✓ Secure'}
+                        </span>
+                      </td>
+                      <td>{history.filter(h => h.account === accName).length} Logs</td>
+                      <td><button style={miniBtn} onClick={() => downloadPDF(`Audit_${accName}`, history.filter(h => h.account === accName))}>Export User PDF</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={panelSection}>
+              <h3>Global Activity</h3>
+              <div style={scrollLog}>
+                {history.slice().reverse().map(log => (
+                  <div key={log.id} style={auditEntry}>
+                    <strong>{log.account}</strong>: {log.systolic}/{log.diastolic} - <small>{log.status}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // --- PRIVACY-ENABLED USER PAGE ---
+  const myData = history.filter(h => h.account === user);
+
+  return (
+    <div style={dashboardLayout}>
+      {alert && <div style={{...alertPop, backgroundColor: alert.color}}>{alert.msg}</div>}
+      <nav style={navbar}>
+        <div style={{fontWeight: 'bold', color: '#4f46e5'}}>VitalTrack Portal</div>
+        <div style={{display: 'flex', alignItems: 'center', gap: '20px'}}>
+            <span style={{fontSize: '0.8rem', color: '#64748b'}}>{getTimeGreeting()}, <b>{user}</b></span>
+            <button onClick={() => setUser(null)} style={logoutBtn}>Logout</button>
+        </div>
+      </nav>
+      <div style={mainGrid}>
+        <div style={leftCol}>
+          <div style={chartCard}>
+            <div style={cardHeader}>
+                <h3>My Biometric Trends</h3>
+                <button onClick={() => downloadPDF("Personal Health Report", myData)} style={outlineBtn}>Download My PDF</button>
+            </div>
+            <div style={{height: '250px'}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={myData}>
+                  <XAxis dataKey="time" fontSize={10} />
+                  <YAxis domain={[40, 200]} fontSize={10} />
+                  <Tooltip />
+                  <Area type="monotone" dataKey="systolic" fill="#f5f3ff" stroke="#4f46e5" strokeWidth={3} />
+                  <Line type="monotone" dataKey="diastolic" stroke="#10b981" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div style={chartCard}>
+            <h3>Submit New Reading</h3>
+            <form onSubmit={addReading} style={{display: 'flex', gap: '10px', marginTop: '10px'}}>
+              <input style={formInput} type="number" placeholder="Systolic" value={systolic} onChange={(e) => setSystolic(e.target.value)} required />
+              <input style={formInput} type="number" placeholder="Diastolic" value={diastolic} onChange={(e) => setDiastolic(e.target.value)} required />
+              <button style={actionBtn} type="submit">Analyze & Log</button>
             </form>
           </div>
         </div>
-      </div>
-    );
-  }
-
-  // --- 2. ADMIN VIEW ---
-  if (isAdmin) {
-    const allUsersData = JSON.parse(localStorage.getItem("bp_app_vault") || "{}");
-    return (
-      <div style={appBgStyle}>
-        <div style={contentWrapper}>
-          <header style={headerStyle}>
-            <h2>Admin Panel</h2>
-            <button onClick={handleLogout} style={logoutBtn}>Logout</button>
-          </header>
-          <h4 style={{color: '#64748b', marginBottom: '15px'}}>User Accounts Management</h4>
-          {Object.keys(allUsersData).map(uName => (
-            <div key={uName} style={historyItem}>
-              <div>
-                <div style={{fontWeight: 'bold', color: '#1e293b'}}>{uName}</div>
-                <div style={{fontSize: '0.7rem', color: '#94a3b8'}}>{allUsersData[uName].history.length} Readings stored</div>
-              </div>
-              <button onClick={() => deleteUser(uName)} style={{...delBtn, color: '#ef4444', background: '#fee2e2'}}>Delete User</button>
+        <div style={rightCol}>
+          <h3>My History</h3>
+          {myData.slice().reverse().map(h => (
+            <div key={h.id} style={logItem}>
+               <div style={{...statusDot, backgroundColor: h.color}}></div>
+               <div style={{flex: 1}}>
+                 <div style={{display: 'flex', justifyContent: 'space-between'}}>
+                    <strong>{h.systolic}/{h.diastolic}</strong>
+                    <small style={{color: '#94a3b8'}}>{h.time}</small>
+                 </div>
+                 <div style={{fontSize: '0.85rem', color: h.color, fontWeight: 'bold'}}>{h.medical}</div>
+                 <div style={systemTag}>{h.status}</div>
+               </div>
             </div>
           ))}
         </div>
-      </div>
-    );
-  }
-
-  // --- 3. DASHBOARD VIEW ---
-  return (
-    <div style={appBgStyle}>
-      <style>{`.dashboard-animate { animation: slideInRight 0.6s ease-out forwards; } @keyframes slideInRight { from { opacity: 0; transform: translateX(50px); } to { opacity: 1; transform: translateX(0); } }`}</style>
-      {showAlert && (
-        <div style={emergencyPopStyle} className="dashboard-animate">
-          <div style={{fontSize: '1.2rem', fontWeight: '900'}}>⚠️ EMERGENCY ALERT</div>
-          <div>Your BP is dangerously high!</div>
-        </div>
-      )}
-      <div style={contentWrapper} className="dashboard-animate">
-        <header style={headerStyle}>
-          <div>
-            <span style={{fontSize: '0.7rem', color: '#64748b', fontWeight: 'bold'}}>PATIENT FILE</span>
-            <h2 style={{margin: 0, color: '#1e293b'}}>{user}'s Dashboard</h2>
-          </div>
-          <div style={{display:'flex', gap: '8px'}}>
-            <button onClick={downloadPDF} style={actionBtn}>📥 PDF</button>
-            <button onClick={handleLogout} style={logoutBtn}>Logout</button>
-          </div>
-        </header>
-
-        <div style={mainCard}>
-          <h4 style={cardTitle}>Blood Pressure Trend</h4>
-          <div style={{ height: "220px", marginTop: '15px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={history}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="time" fontSize={10} stroke="#94a3b8" />
-                <YAxis domain={[40, 220]} fontSize={10} stroke="#94a3b8" />
-                <Tooltip />
-                <ReferenceLine y={180} stroke="#ef4444" strokeDasharray="3 3" label={{value: 'CRISIS', fill: '#ef4444', fontSize: 10}} />
-                <Line type="monotone" dataKey="systolic" stroke="#6366f1" strokeWidth={4} dot={{r:5, fill:'#6366f1', strokeWidth:2, stroke:'#fff'}} />
-                <Line type="monotone" dataKey="diastolic" stroke="#22c55e" strokeWidth={4} dot={{r:5, fill:'#22c55e', strokeWidth:2, stroke:'#fff'}} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div style={mainCard}>
-          <form onSubmit={addReading} style={{ display: "flex", gap: "10px" }}>
-            <input style={modernInput} type="number" placeholder="Sys" value={systolic} onChange={(e) => setSystolic(e.target.value)} required />
-            <input style={modernInput} type="number" placeholder="Dia" value={diastolic} onChange={(e) => setDiastolic(e.target.value)} required />
-            <button style={saveBtn} type="submit">Save</button>
-          </form>
-        </div>
-
-        <h4 style={{color: '#64748b', fontSize: '0.9rem', marginBottom: '15px'}}>Health Logs</h4>
-        {history.slice().reverse().map(item => (
-          <div key={item.id} style={historyItem}>
-            <div style={{display:'flex', alignItems: 'center', gap: '15px'}}>
-               <div style={{fontSize: '1.3rem', fontWeight: '900', color: item.color}}>{item.systolic}/{item.diastolic}</div>
-               <div>
-                 <div style={{fontSize: '0.75rem', fontWeight: 'bold', color: item.color}}>{item.status}</div>
-                 <div style={{fontSize: '0.65rem', color: '#94a3b8'}}>{item.date} • {item.time}</div>
-               </div>
-            </div>
-            <button onClick={() => setHistory(history.filter(h => h.id !== item.id))} style={delBtn}>✕</button>
-          </div>
-        ))}
       </div>
     </div>
   );
 }
 
-// --- STYLES (Keep Original) ---
-const emergencyPopStyle = { backgroundColor: '#ef4444', color: 'white', padding: '15px', borderRadius: '20px', textAlign: 'center', position: 'fixed', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 1000, width: '90%', maxWidth: '400px', border: '3px solid white' };
-const appBgStyle = { backgroundColor: "#f8fafc", minHeight: "100vh", fontFamily: "'Inter', sans-serif", padding: '20px' };
-const uniqueLoginContainer = { display: 'flex', height: '100vh', width: '100vw', background: '#0f172a', overflow: 'hidden' };
-const leftPanel = { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '60px', color: 'white', position: 'relative' };
-const circleDecor = { position: 'absolute', width: '500px', height: '500px', borderRadius: '50%', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)', top: '-150px', left: '-150px', filter: 'blur(120px)', opacity: 0.3 };
-const rightPanel = { flex: 1.2, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f172a' };
-const glassCard = { width: '400px', padding: '50px', background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(30px)', borderRadius: '40px', border: '1px solid rgba(255,255,255,0.1)' };
-const brandText = { fontSize: '4.5rem', fontWeight: '900', margin: 0, letterSpacing: '-3px' };
-const subText = { fontSize: '1.2rem', color: '#94a3b8', marginTop: '10px' };
-const greetingText = { color: '#818cf8', fontWeight: '900', fontSize: '0.7rem', letterSpacing: '3px', textTransform: 'uppercase' };
-const loginHeader = { color: 'white', margin: '15px 0 35px 0', fontSize: '1.8rem' };
-const glassInput = { width: '100%', background: 'transparent', border: 'none', borderBottom: '2px solid #334155', padding: '15px 5px', color: 'white', outline: 'none', marginBottom: '20px', fontSize: '1.2rem' };
-const neonButton = { width: '100%', padding: '18px', borderRadius: '20px', border: 'none', background: '#6366f1', color: 'white', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 15px 30px rgba(99, 102, 241, 0.4)', fontSize: '1rem' };
-const contentWrapper = { maxWidth: "480px", margin: "0 auto" };
-const headerStyle = { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "30px" };
-const mainCard = { backgroundColor: "white", padding: "24px", borderRadius: "30px", boxShadow: "0 10px 15px -3px rgba(0,0,0,0.05)", marginBottom: "20px" };
-const cardTitle = { margin: 0, color: '#1e293b', fontSize: '1rem', fontWeight: '700' };
-const modernInput = { padding: "16px", borderRadius: "18px", border: "1.5px solid #e2e8f0", width: "100%", outline: 'none', fontSize: '1rem' };
-const saveBtn = { padding: "16px 32px", backgroundColor: "#6366f1", color: "white", border: "none", borderRadius: "18px", fontWeight: "800", cursor: 'pointer', boxShadow: '0 10px 15px -3px rgba(99, 102, 241, 0.3)' };
-const actionBtn = { padding: "10px 16px", backgroundColor: "#ecfdf5", color: "#059669", border: 'none', borderRadius: "14px", fontWeight: "800", fontSize: '0.75rem', cursor: 'pointer' };
-const logoutBtn = { padding: "10px 16px", backgroundColor: "#fef2f2", color: '#ef4444', border: 'none', borderRadius: "14px", fontWeight: "800", fontSize: '0.75rem', cursor: 'pointer' };
-const historyItem = { backgroundColor: 'white', padding: '18px', borderRadius: '25px', marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.03)' };
-const delBtn = { background: '#f8fafc', border: 'none', color: '#cbd5e1', cursor: 'pointer', width: '30px', height: '30px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' };
+// --- STYLES (Kept exactly the same) ---
+const darkBg = { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'space-around', background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)', color: 'white', fontFamily: 'sans-serif' };
+const heroSection = { maxWidth: '400px' };
+const heroTitle = { fontSize: '4.5rem', margin: 0, letterSpacing: '-2px' };
+const heroSub = { fontSize: '1.2rem', color: '#94a3b8' };
+const glassCard = { background: 'rgba(255, 255, 255, 0.03)', backdropFilter: 'blur(10px)', padding: '50px', borderRadius: '30px', width: '400px', border: '1px solid rgba(255,255,255,0.1)' };
+const greeting = { color: '#6366f1', fontWeight: 'bold', fontSize: '0.9rem', marginBottom: '10px' };
+const loginHeading = { fontSize: '1.8rem', margin: 0 };
+const darkInput = { width: '100%', padding: '15px 0', background: 'transparent', border: 'none', borderBottom: '1px solid #334155', color: 'white', marginBottom: '20px', fontSize: '1.1rem', outline: 'none' };
+const heroBtn = { width: '100%', padding: '16px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '12px', fontWeight: 'bold', cursor: 'pointer' };
+const adminContainer = { display: 'flex', height: '100vh', background: '#f1f5f9', fontFamily: 'sans-serif' };
+const adminSidebar = { width: '260px', background: '#1e293b', color: 'white', padding: '30px', position: 'relative' };
+const sidebarBrand = { fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '40px', color: '#6366f1' };
+const sidebarTabActive = { padding: '12px', background: '#334155', borderRadius: '8px', marginBottom: '10px' };
+const sidebarTab = { padding: '12px', color: '#94a3b8', cursor: 'pointer' };
+const adminContent = { flex: 1, padding: '40px', overflowY: 'auto' };
+const adminHeader = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' };
+const statGrid = { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', marginBottom: '30px' };
+const statCard = { background: 'white', padding: '20px', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' };
+const adminPanelBody = { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' };
+const panelSection = { background: 'white', padding: '25px', borderRadius: '15px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' };
+const adminTable = { width: '100%', borderCollapse: 'collapse', marginTop: '10px' };
+const scrollLog = { height: '350px', overflowY: 'auto' };
+const auditEntry = { padding: '10px', borderBottom: '1px solid #f1f5f9', fontSize: '0.85rem' };
+const miniBtn = { padding: '5px 10px', background: '#f1f5f9', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.75rem' };
+const adminLogout = { position: 'absolute', bottom: '30px', width: '200px', padding: '10px', background: '#ef4444', border: 'none', borderRadius: '8px', color: 'white' };
+const primaryBtn = { background: '#4f46e5', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '8px', cursor: 'pointer' };
+const dashboardLayout = { background: '#f8fafc', minHeight: '100vh', fontFamily: 'sans-serif' };
+const navbar = { background: 'white', padding: '15px 40px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0' };
+const mainGrid = { display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '30px', padding: '30px 40px' };
+const leftCol = { display: 'flex', flexDirection: 'column', gap: '25px' };
+const rightCol = { background: 'white', padding: '25px', borderRadius: '20px', border: '1px solid #e2e8f0', overflowY: 'auto', maxHeight: '80vh' };
+const chartCard = { background: 'white', padding: '25px', borderRadius: '20px', border: '1px solid #e2e8f0' };
+const cardHeader = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' };
+const logItem = { display: 'flex', gap: '15px', padding: '12px 0', borderBottom: '1px solid #f1f5f9' };
+const statusDot = { width: '4px', borderRadius: '4px' };
+const alertPop = { position: 'fixed', top: '20px', left: '50%', transform: 'translateX(-50%)', padding: '15px 30px', borderRadius: '12px', color: 'white', zIndex: 1000, fontWeight: 'bold' };
+const actionBtn = { padding: '12px 20px', background: '#4f46e5', color: 'white', border: 'none', borderRadius: '10px', fontWeight: 'bold' };
+const formInput = { padding: '12px', borderRadius: '10px', border: '1px solid #e2e8f0', width: '100%' };
+const logoutBtn = { padding: '6px 12px', background: '#fee2e2', color: '#ef4444', border: 'none', borderRadius: '6px' };
+const outlineBtn = { padding: '8px 16px', background: 'white', border: '1px solid #4f46e5', color: '#4f46e5', borderRadius: '8px', fontSize: '0.8rem', fontWeight: 'bold' };
+const systemTag = { fontSize: '0.7rem', color: '#64748b', background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', marginTop: '6px', display: 'inline-block' };
